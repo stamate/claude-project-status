@@ -93,7 +93,7 @@ if [ "$INSTALL_ZSH" = "1" ]; then
         touch "$ZSHRC"
     fi
 
-    if grep -q "claude_project_status" "$ZSHRC" 2>/dev/null; then
+    if grep -qF "$MARKER" "$ZSHRC" 2>/dev/null; then
         printf '  Zsh: Already installed in %s\n' "$ZSHRC"
     else
         printf '\n%s %s\n' "$ZSH_SOURCE_LINE" "$MARKER" >> "$ZSHRC"
@@ -107,7 +107,7 @@ if [ "$INSTALL_BASH" = "1" ]; then
         touch "$BASHRC"
     fi
 
-    if grep -q "claude_project_status" "$BASHRC" 2>/dev/null; then
+    if grep -qF "$MARKER" "$BASHRC" 2>/dev/null; then
         printf '  Bash: Already installed in %s\n' "$BASHRC"
     else
         printf '\n%s %s\n' "$BASH_SOURCE_LINE" "$MARKER" >> "$BASHRC"
