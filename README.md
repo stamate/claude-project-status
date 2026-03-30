@@ -15,7 +15,7 @@ In **Warp Terminal**, the segment appears on the right side of the prompt automa
 ### One-liner
 
 ```sh
-git clone https://github.com/ciocan/claude-project-status.git ~/.claude-project-status
+git clone https://github.com/stamate/claude-project-status.git ~/.claude-project-status
 ~/.claude-project-status/install.sh
 exec $SHELL
 ```
