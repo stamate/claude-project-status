@@ -1,0 +1,251 @@
+#!/bin/sh
+# claude-project-info — Rich CLI for Claude project metadata
+# Standalone command that prints project info in human-readable or JSON format
+#
+# Usage:
+#   claude-project-info [OPTIONS] [PATH]
+#
+# Options:
+#   -j, --json         Output as JSON
+#   -q, --quiet        Exit code only (0=project, 1=not)
+#   -r, --root         Print project root path
+#   -n, --name         Print project name
+#   -f, --flags        Print flags only
+#   -s, --sessions     Include session count (reads ~/.claude/projects/)
+#   --no-color         Disable colored output
+#   --format STRING    Custom format (%n=name, %f=flags, %r=root)
+#   -h, --help         Show this help
+#
+# PATH defaults to current directory.
+
+set -e
+
+# Resolve script directory (follows symlinks)
+SCRIPT_PATH="$0"
+while [ -L "$SCRIPT_PATH" ]; do
+    SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_PATH")" && pwd)"
+    SCRIPT_PATH="$(readlink "$SCRIPT_PATH")"
+    case "$SCRIPT_PATH" in
+        /*) ;;
+        *) SCRIPT_PATH="$SCRIPT_DIR/$SCRIPT_PATH" ;;
+    esac
+done
+SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_PATH")" && pwd)"
+CPS_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+# Source libraries
+. "$CPS_ROOT/lib/format.sh"
+. "$CPS_ROOT/lib/detect.sh"
+. "$CPS_ROOT/lib/encode.sh"
+
+# Defaults
+MODE="human"
+SHOW_SESSIONS=0
+TARGET_DIR=""
+CUSTOM_FORMAT=""
+
+# Parse arguments
+while [ $# -gt 0 ]; do
+    case "$1" in
+        -j|--json)
+            MODE="json"
+            shift
+            ;;
+        -q|--quiet)
+            MODE="quiet"
+            shift
+            ;;
+        -r|--root)
+            MODE="root"
+            shift
+            ;;
+        -n|--name)
+            MODE="name"
+            shift
+            ;;
+        -f|--flags)
+            MODE="flags"
+            shift
+            ;;
+        -s|--sessions)
+            SHOW_SESSIONS=1
+            shift
+            ;;
+        --no-color)
+            CLAUDE_PROMPT_COLOR=0
+            export CLAUDE_PROMPT_COLOR
+            shift
+            ;;
+        --format)
+            if [ -z "${2:-}" ]; then
+                printf '%s\n' "Error: --format requires a format string" >&2
+                exit 2
+            fi
+            MODE="format"
+            CUSTOM_FORMAT="$2"
+            shift 2
+            ;;
+        -h|--help)
+            cat << 'USAGE'
+claude-project-info — Claude project metadata
+
+Usage: claude-project-info [OPTIONS] [PATH]
+
+Options:
+  -j, --json         Output as JSON
+  -q, --quiet        Exit code only (0=project, 1=not)
+  -r, --root         Print project root path
+  -n, --name         Print project name
+  -f, --flags        Print flags only
+  -s, --sessions     Include session count
+  --no-color         Disable colored output
+  --format STRING    Custom format (%n=name, %f=flags, %r=root)
+  -h, --help         Show this help
+
+Markers detected:
+  md     = CLAUDE.md exists at project root
+  cfg    = .claude/settings.json exists
+  local  = .claude/settings.local.json exists
+
+Exit codes:
+  0  Inside a Claude project
+  1  Not inside a Claude project
+USAGE
+            exit 0
+            ;;
+        -*)
+            printf 'Unknown option: %s\n' "$1" >&2
+            exit 2
+            ;;
+        *)
+            TARGET_DIR="$1"
+            shift
+            ;;
+    esac
+done
+
+# If a target directory was specified, cd to it for detection
+if [ -n "$TARGET_DIR" ]; then
+    if [ ! -d "$TARGET_DIR" ]; then
+        printf 'Not a directory: %s\n' "$TARGET_DIR" >&2
+        exit 2
+    fi
+    cd "$TARGET_DIR"
+fi
+
+# Run detection
+_claude_detect_project
+
+# Check if we found a project
+is_project=false
+if [ -n "$_CLAUDE_PS_ROOT" ]; then
+    is_project=true
+fi
+
+# Quiet mode: just exit code
+if [ "$MODE" = "quiet" ]; then
+    if [ "$is_project" = "true" ]; then
+        exit 0
+    else
+        exit 1
+    fi
+fi
+
+# No project found
+if [ "$is_project" = "false" ]; then
+    case "$MODE" in
+        json)
+            printf '{"is_project": false}\n'
+            exit 1
+            ;;
+        *)
+            # No output for non-JSON modes
+            exit 1
+            ;;
+    esac
+fi
+
+# Gather session count if requested
+sessions=0
+if [ "$SHOW_SESSIONS" = "1" ]; then
+    sessions=$(_claude_count_sessions "$_CLAUDE_PS_ROOT")
+fi
+
+# Output based on mode
+case "$MODE" in
+    json)
+        # Build marker booleans
+        has_claude_dir=false
+        has_claude_md=false
+        has_settings_json=false
+        has_settings_local=false
+        [ -d "$_CLAUDE_PS_ROOT/.claude" ]                     && has_claude_dir=true
+        [ -f "$_CLAUDE_PS_ROOT/CLAUDE.md" ]                   && has_claude_md=true
+        [ -f "$_CLAUDE_PS_ROOT/.claude/settings.json" ]       && has_settings_json=true
+        [ -f "$_CLAUDE_PS_ROOT/.claude/settings.local.json" ] && has_settings_local=true
+
+        # Build flags array
+        flags_json="[]"
+        if [ -n "$_CLAUDE_PS_FLAGS" ]; then
+            flags_json="["
+            first=true
+            OLD_IFS="$IFS"
+            IFS=','
+            for flag in $_CLAUDE_PS_FLAGS; do
+                if [ "$first" = "true" ]; then
+                    first=false
+                else
+                    flags_json="${flags_json}, "
+                fi
+                flags_json="${flags_json}\"${flag}\""
+            done
+            IFS="$OLD_IFS"
+            flags_json="${flags_json}]"
+        fi
+
+        # Output JSON
+        if [ "$SHOW_SESSIONS" = "1" ]; then
+            printf '{"is_project": true, "root": "%s", "name": "%s", "markers": {"claude_dir": %s, "claude_md": %s, "settings_json": %s, "settings_local_json": %s}, "flags": %s, "sessions": %d}\n' \
+                "$_CLAUDE_PS_ROOT" "$_CLAUDE_PS_NAME" \
+                "$has_claude_dir" "$has_claude_md" "$has_settings_json" "$has_settings_local" \
+                "$flags_json" "$sessions"
+        else
+            printf '{"is_project": true, "root": "%s", "name": "%s", "markers": {"claude_dir": %s, "claude_md": %s, "settings_json": %s, "settings_local_json": %s}, "flags": %s}\n' \
+                "$_CLAUDE_PS_ROOT" "$_CLAUDE_PS_NAME" \
+                "$has_claude_dir" "$has_claude_md" "$has_settings_json" "$has_settings_local" \
+                "$flags_json"
+        fi
+        ;;
+    root)
+        printf '%s\n' "$_CLAUDE_PS_ROOT"
+        ;;
+    name)
+        printf '%s\n' "$_CLAUDE_PS_NAME"
+        ;;
+    flags)
+        printf '%s\n' "$_CLAUDE_PS_FLAGS"
+        ;;
+    format)
+        CLAUDE_PROMPT_FORMAT="$CUSTOM_FORMAT"
+        export CLAUDE_PROMPT_FORMAT
+        _claude_format_segment "$_CLAUDE_PS_NAME" "$_CLAUDE_PS_FLAGS"
+        # Trim trailing space
+        printf '%s\n' "$_CLAUDE_PS_CACHED_OUTPUT" | sed 's/ $//'
+        ;;
+    human)
+        printf 'Claude Project: %s\n' "$_CLAUDE_PS_NAME"
+        printf 'Root:           %s\n' "$_CLAUDE_PS_ROOT"
+        if [ -n "$_CLAUDE_PS_FLAGS" ]; then
+            printf 'Flags:          %s\n' "$_CLAUDE_PS_FLAGS"
+        fi
+        if [ "$SHOW_SESSIONS" = "1" ]; then
+            printf 'Sessions:       %d\n' "$sessions"
+        fi
+        # Show marker details
+        printf '\nMarkers:\n'
+        [ -d "$_CLAUDE_PS_ROOT/.claude" ]                     && printf '  ✓ .claude/ directory\n'     || printf '  ✗ .claude/ directory\n'
+        [ -f "$_CLAUDE_PS_ROOT/CLAUDE.md" ]                   && printf '  ✓ CLAUDE.md\n'              || printf '  ✗ CLAUDE.md\n'
+        [ -f "$_CLAUDE_PS_ROOT/.claude/settings.json" ]       && printf '  ✓ .claude/settings.json\n'  || printf '  ✗ .claude/settings.json\n'
+        [ -f "$_CLAUDE_PS_ROOT/.claude/settings.local.json" ] && printf '  ✓ .claude/settings.local.json\n' || printf '  ✗ .claude/settings.local.json\n'
+        ;;
+esac

@@ -1,0 +1,16 @@
+# claude-project-status: Starship custom module
+#
+# Add this to your ~/.config/starship.toml:
+#
+# 1. Add 'claude' to your format string:
+#    format = "... $custom.claude ..."
+#
+# 2. Add the module definition below:
+
+[custom.claude]
+command = "claude-project-info --format '[claude:%n %f]' 2>/dev/null"
+when = "claude-project-info --quiet 2>/dev/null"
+shell = ["sh"]
+description = "Claude project status"
+format = "[$output]($style) "
+style = "purple"
